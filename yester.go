@@ -156,7 +156,11 @@ func printErrors(config Config) {
 func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
 	defer wg.Done()
 
-	// Prepare query
+	// -- Prepare query
+	if test.Request.Method == "" { // default to GET
+		test.Request.Method = "GET"
+	}
+
 	req, err := http.NewRequest(test.Request.Method, config.Base+test.Request.Path, nil)
 	if err != nil {
 		test.Result.Errors = append(test.Result.Errors, err)
@@ -167,7 +171,9 @@ func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
 		req.Header.Set(k, v)
 	}
 
-	// Execute query
+	// TODO: Body
+
+	// -- Execute query
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		test.Result.Errors = append(test.Result.Errors, err)
