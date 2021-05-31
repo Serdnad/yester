@@ -1,0 +1,10 @@
+---
+base: http://example.com
+
+tests:
+  live:
+    request:
+      method: GET
+      path: /
+    validation:
+      statuscode: 200

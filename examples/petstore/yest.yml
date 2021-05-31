@@ -1,0 +1,59 @@
+---
+base: https://petstore.swagger.io/v2
+
+tests:
+  getInventory:
+    request:
+      method: GET
+      path: /store/inventory
+      headers:
+        accept: application/json
+    validation:
+      statuscode: 200
+      headers:
+        content-type: application/json
+      body:
+        - body.available > 500
+        - body.sold > 0
+        - typeof body.pending == 'number'
+
+  getUser:
+    request:
+      method: GET
+      path: /user/string
+      headers:
+        accept: application/json
+    validation:
+      statuscode: 200
+      headers:
+        content-type: application/json
+        custom-header: my-value
+      body:
+        - body.id != null
+
+  getOtherUser:
+    request:
+      method: GET
+      path: /user/invalid_username
+      headers:
+        accept: application/json
+    validation:
+      statuscode: 200
+      headers:
+        content-type: application/json
+      body:
+        - body.id != null
+
+
+# TODO: Once "dependent" tasks are a thing, creating and then searching by user would be a great example
+#  getUser2:
+#    request:
+#      method: GET
+#      path: /user/invalid_username
+#      headers:
+#        accept: application/json
+#    validation:
+#      statuscode: 200
+#      headers:
+#        content-type: application/jsons
+#        custom-header: my-value
