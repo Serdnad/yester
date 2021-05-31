@@ -61,7 +61,7 @@ func main() {
 		for key, test := range config.Tests {
 			test.Name = key
 			wg.Add(1)
-			go runTest(&wg, *config, test)
+			go runTest(&wg, config, test)
 		}
 
 		wg.Wait()
@@ -122,17 +122,8 @@ func findConfigs() []Config {
 
 // Print the testing summary
 func printSummary(config *Config) {
-	var total int
-	var passed int
-
-	for _, test := range config.Tests {
-		if test.Result.Passed {
-			passed++
-		}
-		total++
-	}
-
-	config.FailCount = total - passed
+	total := len(config.Tests)
+	passed := total - config.FailCount
 
 	fmt.Printf("== [%s] Result Summary ==\n", config.Package)
 	if config.FailCount == 0 {
@@ -162,7 +153,7 @@ func printErrors(config Config) {
 }
 
 // Run a single test, using goroutines to parallelize
-func runTest(wg *sync.WaitGroup, config Config, test *Test) {
+func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
 	defer wg.Done()
 
 	// Prepare query
@@ -236,4 +227,7 @@ func runTest(wg *sync.WaitGroup, config Config, test *Test) {
 	}
 
 	test.Result.Passed = len(test.Result.Errors) == 0
+	if !test.Result.Passed {
+		config.FailCount++
+	}
 }
