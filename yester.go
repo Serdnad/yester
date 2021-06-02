@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/gookit/color"
@@ -17,22 +18,24 @@ import (
 	"sync"
 )
 
-// TODO: Consider alternate names
-type Config struct {
+type TestGroup struct {
 	Package string
 	Base    string
 	Tests   map[string]*Test
 
 	FailCount int
+	wg        sync.WaitGroup
 }
 
 type Test struct {
 	Name    string
+	After   string
 	Request struct {
 		Method      string
 		Path        string
 		Headers     map[string]string
 		QueryParams interface{}
+		Body        interface{}
 	}
 	Validation struct {
 		StatusCode string
@@ -46,29 +49,26 @@ type Test struct {
 	}
 }
 
+var TestQueue = make(chan *TestNode)
+
 func main() {
+
+	// Run tests as they're queued
+	go func() {
+		for {
+			node := <-TestQueue
+			go runTest(TestQueue, node)
+		}
+	}()
+
+	var configsWg sync.WaitGroup
 	configs := findConfigs()
-	for i, _ := range configs {
-		config := &configs[i]
-
-		_, err := yaml.Marshal(&config)
-		if err != nil {
-			log.Fatal(err)
-		}
-		//fmt.Println(string(d))
-
-		var wg sync.WaitGroup
-		for key, test := range config.Tests {
-			test.Name = key
-			wg.Add(1)
-			go runTest(&wg, config, test)
-		}
-
-		wg.Wait()
-		printSummary(config)
-		printErrors(*config)
-		fmt.Println()
+	for i := range configs {
+		configsWg.Add(1)
+		go processConfig(&configsWg, &configs[i])
 	}
+
+	configsWg.Wait()
 
 	totalFails := 0
 	for _, config := range configs {
@@ -78,9 +78,41 @@ func main() {
 	os.Exit(totalFails)
 }
 
+func processConfig(configWg *sync.WaitGroup, config *TestGroup) {
+	defer configWg.Done()
+
+	// Create a node for each test
+	nodes := make(map[string]*TestNode)
+	for key, test := range config.Tests {
+		test.Name = key
+		nodes[key] = &TestNode{Key: key, Test: test, Config: config}
+	}
+
+	// Construct "graph" of nodes based on test dependencies
+	var rootNodes []*TestNode
+	for _, node := range nodes {
+		config.wg.Add(1)
+		if node.Test.After == "" {
+			rootNodes = append(rootNodes, node)
+		} else {
+			nodes[node.Test.After].Children = append(nodes[node.Test.After].Children, node)
+		}
+	}
+
+	// Queue tests with no "dependencies"
+	for _, node := range rootNodes {
+		TestQueue <- node
+	}
+
+	config.wg.Wait()
+	printSummary(config)
+	printErrors(config)
+	fmt.Println()
+}
+
 // Recursively walk down from the current directory to find test configs
-func findConfigs() []Config {
-	var configs []Config
+func findConfigs() []TestGroup {
+	var configs []TestGroup
 	err := filepath.Walk(".",
 		func(path string, _ os.FileInfo, err error) error {
 			if err != nil {
@@ -90,7 +122,7 @@ func findConfigs() []Config {
 				return nil
 			}
 
-			var config Config
+			var config TestGroup
 			parent := strings.Replace(path, "yest.yml", "", 1) // TODO: A slice would be more efficient
 			parent = strings.TrimSuffix(parent, "/")
 			if parent == "" { // handle root case
@@ -121,7 +153,7 @@ func findConfigs() []Config {
 }
 
 // Print the testing summary
-func printSummary(config *Config) {
+func printSummary(config *TestGroup) {
 	total := len(config.Tests)
 	passed := total - config.FailCount
 
@@ -136,7 +168,7 @@ func printSummary(config *Config) {
 }
 
 // Print any errors that arose during testing
-func printErrors(config Config) {
+func printErrors(config *TestGroup) {
 	for _, test := range config.Tests {
 		if test.Result.Passed {
 			continue
@@ -153,15 +185,28 @@ func printErrors(config Config) {
 }
 
 // Run a single test, using goroutines to parallelize
-func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
-	defer wg.Done()
+func runTest(q chan *TestNode, node *TestNode) {
+	test := node.Test
+	config := node.Config
+	defer config.wg.Done()
 
 	// -- Prepare query
 	if test.Request.Method == "" { // default to GET
 		test.Request.Method = "GET"
 	}
 
-	req, err := http.NewRequest(test.Request.Method, config.Base+test.Request.Path, nil)
+	var body []byte
+	if test.Request.Body != nil {
+		var err error
+		body, err = json.Marshal(test.Request.Body)
+		if err != nil {
+			fmt.Println(err)
+			test.Result.Passed = false
+			return
+		}
+	}
+
+	req, err := http.NewRequest(test.Request.Method, config.Base+test.Request.Path, bytes.NewBuffer(body))
 	if err != nil {
 		test.Result.Errors = append(test.Result.Errors, err)
 		return
@@ -170,8 +215,6 @@ func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
 	for k, v := range test.Request.Headers {
 		req.Header.Set(k, v)
 	}
-
-	// TODO: Body
 
 	// -- Execute query
 	resp, err := http.DefaultClient.Do(req)
@@ -227,7 +270,6 @@ func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
 			if !result {
 				e := errors.New(fmt.Sprintf("(%s) evaluated to false", expr))
 				test.Result.Errors = append(test.Result.Errors, e)
-				return
 			}
 		}
 	}
@@ -235,5 +277,10 @@ func runTest(wg *sync.WaitGroup, config *Config, test *Test) {
 	test.Result.Passed = len(test.Result.Errors) == 0
 	if !test.Result.Passed {
 		config.FailCount++
+	}
+
+	// Enqueue dependent tests
+	for _, child := range node.Children {
+		q <- child
 	}
 }
