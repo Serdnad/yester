@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type TestGroup struct {
@@ -51,8 +52,8 @@ type Test struct {
 
 var TestQueue = make(chan *TestNode)
 
-func main() {
-
+// Main entrypoint
+func run() {
 	// Run tests as they're queued
 	go func() {
 		for {
@@ -106,7 +107,7 @@ func processConfig(configWg *sync.WaitGroup, config *TestGroup) {
 
 	config.wg.Wait()
 	printSummary(config)
-	printErrors(config)
+	printDetails(config)
 	fmt.Println()
 }
 
@@ -168,13 +169,18 @@ func printSummary(config *TestGroup) {
 }
 
 // Print any errors that arose during testing
-func printErrors(config *TestGroup) {
+func printDetails(config *TestGroup) {
 	for _, test := range config.Tests {
 		if test.Result.Passed {
+			if verbose {
+				color.Green.Print("PASSED")
+				fmt.Printf(" [%s]\n", test.Name)
+			}
+
 			continue
 		}
 
-		color.Red.Printf("FAILED")
+		color.Red.Print("FAILED")
 		padding := " "
 		for _, err := range test.Result.Errors {
 			fmt.Printf("%s[%s]: %s\n", padding, test.Name, err)
@@ -200,8 +206,8 @@ func runTest(q chan *TestNode, node *TestNode) {
 		var err error
 		body, err = json.Marshal(test.Request.Body)
 		if err != nil {
-			fmt.Println(err)
-			test.Result.Passed = false
+			fmt.Println("INTERNAL ERROR")
+			test.Result.Errors = append(test.Result.Errors, err)
 			return
 		}
 	}
@@ -258,7 +264,9 @@ func runTest(q chan *TestNode, node *TestNode) {
 		for _, expr := range test.Validation.Body {
 			_, err = vm.Run(fmt.Sprintf("result = %s", expr))
 			if err != nil {
-				log.Fatal(err) // TODO: this maybe shouldn't be this.
+				e := errors.New(fmt.Sprintf("(%s) evaluated with error: %s", expr, err))
+				test.Result.Errors = append(test.Result.Errors, e)
+				continue
 			}
 
 			value, err := vm.Get("result")
@@ -280,6 +288,7 @@ func runTest(q chan *TestNode, node *TestNode) {
 	}
 
 	// Enqueue dependent tests
+	time.Sleep(100 * time.Millisecond) // Sleep between successive tests. TODO: Make configurable
 	for _, child := range node.Children {
 		q <- child
 	}

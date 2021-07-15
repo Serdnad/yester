@@ -13,6 +13,7 @@ tests:
       headers:
         content-type: application/json
       body:
+        - body.asd.a == 4
         - body.available > 500
         - body.sold > 0
         - typeof body.pending == 'number'
